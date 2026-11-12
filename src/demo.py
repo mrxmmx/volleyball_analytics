@@ -17,6 +17,27 @@ from ml_manager.utils.tools import det2supervision, draw_trajectory
 from vb_gui.calibration.database import CalibrationDB
 from vb_gui.calibration.calibration_gui import create_gui
 
+def court_polygon(court_corners):
+    """Turn the saved court corners into an OpenCV polygon."""
+    pts = []
+    for p in court_corners:
+        if isinstance(p, dict):
+            pts.append([p["x"], p["y"]])
+        else:
+            pts.append([p[0], p[1]])
+    pts = np.array(pts, dtype=np.float32)
+    return cv2.convexHull(pts)
+
+
+def players_inside_court(xyxy, court_poly, margin=60):
+    """True for each box whose feet (bottom-center) are inside the court,
+    or within `margin` pixels outside it."""
+    keep = np.zeros(len(xyxy), dtype=bool)
+    for i, (x1, y1, x2, y2) in enumerate(xyxy):
+        foot = (float((x1 + x2) / 2), float(y2))
+        keep[i] = cv2.pointPolygonTest(court_poly, foot, True) >= -margin
+    return keep
+
 
 def run_object_detection(ml_manager: MLManager,
                          video_path: str,
@@ -78,6 +99,9 @@ def run_object_detection(ml_manager: MLManager,
     # Tracking state
     tracker = sv.ByteTrack()
     ball_trajectory = []
+    court_poly = court_polygon(court_calibration_json["court_corners"])
+    
+    print(court_calibration_json["court_corners"])
     frame_count = 0
     print("Processing video frames...")
 
@@ -117,17 +141,21 @@ def run_object_detection(ml_manager: MLManager,
                 # Update ball trajectory for tracking
                 ball_trajectory.append(ball.bbox.center)
 
-            court = court_calibration_json["court_corners"]
-            # TODO: Filter players outside court
-            # ml_manager.filter_people_outside_court(players, court)
-
             # Process action detections
             action_detections_sv = det2supervision(detections=actions)
 
             # Process player detections
             player_detections_sv = det2supervision(detections=players, tracking_instance=tracker)
 
+            if len(player_detections_sv) > 0 and len(court_poly) >= 3:
+                
+                    keep = players_inside_court(player_detections_sv.xyxy, court_poly, margin=60)
+            player_detections_sv = player_detections_sv[keep]
             # Draw ball trajectory (8 frames trailing)
+
+            if len(player_detections_sv) > 0 and player_detections_sv.confidence is not None:
+                player_detections_sv = player_detections_sv[player_detections_sv.confidence >= 0.6]
+
             if ball_trajectory:
                 draw_trajectory(annotated_frame, ball_trajectory, 12)
 

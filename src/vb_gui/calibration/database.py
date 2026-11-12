@@ -9,7 +9,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 # -----------------------------
 # ORM Model for Calibrations
 # -----------------------------
-class CalibrationRecord(DeclarativeBase):
+class Base(DeclarativeBase):
+    pass
+
+
+class CalibrationRecord(Base):
     __tablename__ = "calibrations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -40,7 +44,7 @@ class CalibrationRecord(DeclarativeBase):
 # -----------------------------
 # ORM Model for Court Models
 # -----------------------------
-class CourtModel(DeclarativeBase):
+class CourtModel(Base):
     __tablename__ = "court_models"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -63,6 +67,7 @@ class CourtModel(DeclarativeBase):
 class CalibrationDB:
     def __init__(self, db_path: str = "volleyball_calibration.db"):
         self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.engine = create_engine(
             f"sqlite:///{self.db_path}",
@@ -70,7 +75,7 @@ class CalibrationDB:
             future=True,
         )
 
-        DeclarativeBase.metadata.create_all(self.engine)
+        Base.metadata.create_all(self.engine)
 
         self.Session = sessionmaker(
             bind=self.engine,
