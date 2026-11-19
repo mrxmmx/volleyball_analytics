@@ -18,6 +18,12 @@ from vb_gui.calibration.database import CalibrationDB
 from vb_gui.calibration.calibration_gui import create_gui
 
 def court_polygon(court_corners):
+
+    track_seen = {}      # tracker_id -> frames seen
+    track_inside = {}    # tracker_id -> frames with feet strictly inside the court
+    GRACE_FRAMES = 150   # new tracks are shown this long before being judged
+    MIN_INSIDE = 10      # frames a track must spend inside the court to stay
+
     """Turn the saved court corners into an OpenCV polygon."""
     pts = []
     for p in court_corners:
@@ -100,7 +106,12 @@ def run_object_detection(ml_manager: MLManager,
     tracker = sv.ByteTrack()
     ball_trajectory = []
     court_poly = court_polygon(court_calibration_json["court_corners"])
-    
+
+    track_seen = {}      # tracker_id -> frames seen
+    track_inside = {}    # tracker_id -> frames with feet strictly inside the court
+    GRACE_FRAMES = 150   # new tracks are shown this long before being judged
+    MIN_INSIDE = 10      # frames a track must spend inside the court to stay,
+
     print(court_calibration_json["court_corners"])
     frame_count = 0
     print("Processing video frames...")
@@ -148,10 +159,17 @@ def run_object_detection(ml_manager: MLManager,
             player_detections_sv = det2supervision(detections=players, tracking_instance=tracker)
 
             if len(player_detections_sv) > 0 and len(court_poly) >= 3:
-                
-                    keep = players_inside_court(player_detections_sv.xyxy, court_poly, margin=60)
-            player_detections_sv = player_detections_sv[keep]
-            # Draw ball trajectory (8 frames trailing)
+                near = players_inside_court(player_detections_sv.xyxy, court_poly, margin=60)
+                inside = players_inside_court(player_detections_sv.xyxy, court_poly, margin=0)
+                keep = np.zeros(len(player_detections_sv), dtype=bool)
+                for i, tid in enumerate(player_detections_sv.tracker_id):
+                    tid = int(tid)
+                    track_seen[tid] = track_seen.get(tid, 0) + 1
+                    track_inside[tid] = track_inside.get(tid, 0) + int(inside[i])
+                    confirmed = track_inside[tid] >= MIN_INSIDE
+                    in_grace = track_seen[tid] <= GRACE_FRAMES
+                    keep[i] = near[i] and (confirmed or in_grace)
+                player_detections_sv = player_detections_sv[keep]
 
             if len(player_detections_sv) > 0 and player_detections_sv.confidence is not None:
                 player_detections_sv = player_detections_sv[player_detections_sv.confidence >= 0.6]
@@ -318,6 +336,7 @@ def run_video_classification(ml_manager: MLManager, video_path: str, output_path
 
     print(f"Video classification completed. Frames written: {frame_count}. Output saved to: {output_path}")
 
+
 def main():
     # TODO:
     #  Design the software based on this: https://chatgpt.com/share/6a6deeb9-ba74-83eb-8290-3a2afbf184f4
@@ -341,7 +360,7 @@ def main():
     Example usage of the demo functions.
     """
     # Example video path (update with your actual video path)
-    root_path = Path().cwd().parent
+    root_path = Path(__file__).resolve().parent.parent
     db_path = root_path.joinpath("db").joinpath('calibration.db').as_posix()
     ml_manager = MLManager()
     # output_classification = "../output/IRN_vs_FRA_video_classification.mp4"
@@ -358,9 +377,6 @@ def main():
 
     output_detection = root_path.joinpath("output").joinpath(video_path.stem + '_object_detection.mp4').as_posix()
 
-    #
-    # Create output directory if it doesn't exist
-    Path("output").mkdir(exist_ok=True)
 
     print("Running object detection demo...")
     run_object_detection(ml_manager, video_path, output_detection, result_json)
