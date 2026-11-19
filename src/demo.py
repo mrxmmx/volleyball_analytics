@@ -221,22 +221,11 @@ def run_object_detection(ml_manager: MLManager,
 
 def run_video_classification(ml_manager: MLManager, video_path: str, output_path: str) -> None:
     """
-    Run game state classification on video every 30 frames.
-
-    This function:
-    - Loads the ML Manager
-    - Classifies game state every 30 frames
-    - Visualizes classification results on the video
-    - Saves the output video
-
-    Args:
-        ml_manager: Model Manager that loads and manages models.
-        video_path: Path to input video file
-        output_path: Path to save output video with visualizations
+    Classify game state every 30 frames and write an annotated video.
+    Every frame is written; the latest prediction is shown until the next one.
     """
     print("Initializing ML Manager...")
 
-    # Check if game state classification model is available
     if not ml_manager.is_model_available('game_state_classification'):
         raise RuntimeError("Game state classification model not available")
 
@@ -245,103 +234,89 @@ def run_video_classification(ml_manager: MLManager, video_path: str, output_path
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
 
-    # Get video properties
     width, height, fps, _, total_frames = [int(cap.get(prop)) for prop in range(3, 8)]
+    fps = fps or 30
     print(f"Video properties: {width}x{height}, {fps} FPS, {total_frames} frames")
 
-    # setup output folder
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Setup video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    if not out.isOpened():
+        raise RuntimeError(f"Could not create output video: {output_path}")
 
-    # Classification parameters
+    classification_interval = 30
     frame_buffer = []
+    current_game_state = "Unknown"
     current_confidence = 0.0
-
-    print("Processing video frames...")
     frame_count = 0
 
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.7
+    thickness = 2
+
+    print("Processing video frames...")
     with Progress() as progress:
-        task = progress.add_task(
-            "[green]Processing video...",
-            total=total_frames
-        )
+        task = progress.add_task("[green]Processing video...", total=total_frames)
 
         while True:
             ret, frame = cap.read()
+            if not ret:
+                break
+
             frame_count += 1
             progress.update(task, advance=1)
 
-            if not ret:
-                progress.update(task, advance=30)
-                break
-
-            # Add frame to buffer
+            # Collect frames; classify when the batch is full, then reset
             frame_buffer.append(frame.copy())
+            if len(frame_buffer) == classification_interval:
+                result = ml_manager.classify_game_state(frame_buffer)
+                current_game_state = result.predicted_class
+                current_confidence = result.confidence
+                frame_buffer = []
 
-            if len(frame_buffer) != 30:
-                continue
-
-            # Classify game state every 30 frames
-            game_state_result = ml_manager.classify_game_state(frame_buffer)
-
-            current_game_state = game_state_result.predicted_class
-            current_confidence = game_state_result.confidence
-
-            progress.update(
-                task,
-                description=(
-                    f"[green]Frame {frame_count} | "
-                    f"State: {current_game_state} | "
-                    f"Conf: {current_confidence:.3f}"
+                progress.update(
+                    task,
+                    description=(
+                        f"[green]Frame {frame_count} | "
+                        f"State: {current_game_state} | "
+                        f"Conf: {current_confidence:.3f}"
+                    ),
                 )
-            )
 
-            # Annotate frame with game state
+            # Annotate EVERY frame with the latest prediction
             annotated_frame = frame.copy()
 
             state_text = f"Game State: {current_game_state}"
             confidence_text = f"Confidence: {current_confidence:.3f}"
             frame_text = f"Frame: {frame_count}"
 
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7
-            thickness = 2
-
             text_size = cv2.getTextSize(state_text, font, font_scale, thickness)[0]
 
-            cv2.rectangle(annotated_frame, (10, 10), (text_size[0] + 20, 100), (0, 0, 0), -1)
-
-            cv2.rectangle(annotated_frame, (10, 10), (text_size[0] + 20, 100), (255, 255, 255), 2)
-
-            cv2.putText(annotated_frame, state_text, (15, 35), font, font_scale, (255, 255, 255), thickness)
-
-            cv2.putText(annotated_frame, confidence_text, (15, 60), font, font_scale, (255, 255, 255), thickness)
-
-            cv2.putText(annotated_frame, frame_text, (15, 85), font, font_scale, (255, 255, 255), thickness)
-
-            if current_game_state == "Play":
+            s = str(current_game_state).lower().replace("-", " ").replace("_", " ")
+            if s == "play":
                 color = (0, 255, 0)
-            elif current_game_state == "No Play":
+            elif s == "no play":
                 color = (0, 0, 255)
-            elif current_game_state == "Service":
+            elif s == "service":
                 color = (255, 0, 255)
             else:
                 color = (255, 255, 255)
 
+            cv2.rectangle(annotated_frame, (10, 10), (text_size[0] + 20, 100), (0, 0, 0), -1)
             cv2.rectangle(annotated_frame, (10, 10), (text_size[0] + 20, 100), color, 3)
+            cv2.putText(annotated_frame, state_text, (15, 35), font, font_scale, (255, 255, 255), thickness)
+            cv2.putText(annotated_frame, confidence_text, (15, 60), font, font_scale, (255, 255, 255), thickness)
+            cv2.putText(annotated_frame, frame_text, (15, 85), font, font_scale, (255, 255, 255), thickness)
 
             out.write(annotated_frame)
 
-    # Cleanup
     cap.release()
     out.release()
-    ml_manager.cleanup()
+    if hasattr(ml_manager, "cleanup"):
+        ml_manager.cleanup()
 
-    print(f"Video classification completed. Output saved to: {output_path}")
-
+    print(f"Video classification completed. Frames written: {frame_count}. Output saved to: {output_path}")
 
 def main():
     # TODO:
