@@ -18,7 +18,7 @@ __all__ = [
     "ModelWeightsConfig",
     "YOLOTrainingConfig",
     "VideoMAETrainingConfig",
-    "UnifiedTrainer",
+   # "UnifiedTrainer",
     "YOLOModelType",
     "PlayerDetectionMode", 
     "GameState",
